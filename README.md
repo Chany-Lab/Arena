@@ -29,7 +29,7 @@ No randomization yet: these show the loop works, not how robust a policy is.
 Runs on [Playground](https://github.com/Chany-Lab/Playground)'s environment (Isaac Sim 6.2, Isaac Lab 3.0); nothing is installed into it.
 
 ```bash
-git clone --recurse-submodules https://github.com/Chany-Lab/Arena.git && cd Arena
+git clone https://github.com/Chany-Lab/Arena.git && cd Arena   # no --recurse-submodules: Arena's own submodules use SSH URLs
 ./setup.sh                      # Arena checkout + patch; PLAYGROUND_DIR defaults to ../Playground
 
 ./run.sh                        # scripted policy, 10 episodes
