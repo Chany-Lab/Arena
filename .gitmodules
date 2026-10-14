@@ -1,0 +1,5 @@
+[submodule "external/IsaacLab-Arena"]
+	path = external/IsaacLab-Arena
+	url = https://github.com/isaac-sim/IsaacLab-Arena.git
+	shallow = true
+	ignore = dirty

@@ -1,0 +1,106 @@
+diff --git a/isaaclab_arena/embodiments/franka/franka.py b/isaaclab_arena/embodiments/franka/franka.py
+index 92d7668..744c7a2 100644
+--- a/isaaclab_arena/embodiments/franka/franka.py
++++ b/isaaclab_arena/embodiments/franka/franka.py
+@@ -29,7 +29,7 @@ from isaaclab.sensors import CameraCfg
+ from isaaclab.sensors.frame_transformer.frame_transformer_cfg import FrameTransformerCfg, OffsetCfg
+ from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR, ISAACLAB_NUCLEUS_DIR
+ from isaaclab.utils.configclass import configclass
+-from isaaclab_assets.robots.franka import FRANKA_PANDA_CFG, FRANKA_PANDA_HIGH_PD_CFG
++from isaaclab_assets.robots.franka import FRANKA_PANDA_LEGACY_CFG as FRANKA_PANDA_CFG, FRANKA_PANDA_LEGACY_HIGH_PD_CFG as FRANKA_PANDA_HIGH_PD_CFG  # IL3.0@d061bf35: legacy names
+ from isaaclab_tasks.contrib.stack.mdp import franka_stack_events
+ from isaaclab_tasks.contrib.stack.mdp.observations import ee_frame_pos, ee_frame_quat
+ 
+diff --git a/isaaclab_arena/environments/arena_world_scene_access.py b/isaaclab_arena/environments/arena_world_scene_access.py
+index 603925f..21c7285 100644
+--- a/isaaclab_arena/environments/arena_world_scene_access.py
++++ b/isaaclab_arena/environments/arena_world_scene_access.py
+@@ -32,7 +32,7 @@ def get_representative_geometry_prim_groups(
+     geometry_prim_path = getattr(scene.cfg, scene_key).prim_path.format(ENV_REGEX_NS=scene.env_regex_ns)
+     assert scene.clone_plan is not None, f"Cannot resolve geometry for scene key '{scene_key}' without a clone plan."
+ 
+-    clone_matches = tuple(cloner.query.iter_sources(scene.clone_plan, geometry_prim_path))
++    clone_matches = tuple(_iter_sources(scene.clone_plan, geometry_prim_path))
+     assert (
+         clone_matches
+     ), f"Geometry path '{geometry_prim_path}' for scene key '{scene_key}' does not match the scene clone plan."
+@@ -47,6 +47,42 @@ def get_representative_geometry_prim_groups(
+     return representative_prim_groups
+ 
+ 
++def _to_numpy(array) -> np.ndarray:
++    return array.numpy() if hasattr(array, "numpy") and not isinstance(array, np.ndarray) else np.asarray(array)
++
++
++def _iter_sources(plan, path_expr: str):
++    """Yield ``(source_root, destination_template, source_path, env_ids)`` per asset prototype owning ``path_expr``.
++
++    Stand-in for ``cloner.query.iter_sources``, which Isaac Lab removed after Arena's pinned commit
++    (IL3.0@d061bf35 keeps only ``cloner.path`` primitives and numeric topology queries).
++    """
++    topology = plan.topology
++    members = _to_numpy(topology.world_prototypes)
++    starts = _to_numpy(topology.world_prototype_starts)
++    layout = _to_numpy(topology.world_prototype_layout)
++    source_paths = cloner.path.get_asset_prototype_paths(plan)
++    for asset_id, cfg in enumerate(plan.asset_cfgs):
++        declared = cfg.prim_path.rstrip("/")
++        source_root = source_paths[asset_id]
++        if source_root is None:
++            continue
++        if path_expr == declared:
++            suffix = ""
++        elif path_expr.startswith(declared + "/"):
++            suffix = path_expr[len(declared):]
++        else:
++            continue
++        groups = [g - 1 for g in range(len(starts) - 1) if asset_id in members[starts[g] : starts[g + 1]]]
++        if -1 in groups:
++            env_ids = tuple(range(len(layout)))
++        else:
++            env_ids = tuple(int(i) for i in np.nonzero(np.isin(layout, groups))[0])
++        if not env_ids:
++            continue
++        yield source_root, declared, source_root + suffix, env_ids
++
++
+ def _find_single_rigid_body_prim_in_subtree(root_prim: Usd.Prim, rigid_object_name: str) -> Usd.Prim:
+     """Return the only rigid-body prim in the root prim's subtree."""
+     rigid_body_prims_in_subtree = sim_utils.get_all_matching_child_prims(
+diff --git a/isaaclab_arena/environments/isaaclab_arena_manager_based_env.py b/isaaclab_arena/environments/isaaclab_arena_manager_based_env.py
+index 614710a..8f3d73d 100644
+--- a/isaaclab_arena/environments/isaaclab_arena_manager_based_env.py
++++ b/isaaclab_arena/environments/isaaclab_arena_manager_based_env.py
+@@ -189,6 +189,8 @@ class IsaacLabArenaManagerBasedRLEnv(ManagerBasedRLEnv):
+         return observations, rewards, terminated & active_before_step, truncated & active_before_step, extras
+ 
+     def _reset_idx(self, env_ids: Sequence[int]) -> None:
++        if isinstance(env_ids, slice):  # IL3.0@d061bf35 passes slice(None) for "all envs"
++            env_ids = torch.arange(self.num_envs, device=self.device)[env_ids]
+         requested_env_ids = torch.as_tensor(env_ids, dtype=torch.long, device=self.device).sort().values
+         finishing_env_ids = requested_env_ids[self._active_episode_mask[requested_env_ids]]
+         if len(finishing_env_ids) > 0:
+diff --git a/isaaclab_arena/recording/arena_recorder_manager.py b/isaaclab_arena/recording/arena_recorder_manager.py
+index a502dd3..90cfd6e 100644
+--- a/isaaclab_arena/recording/arena_recorder_manager.py
++++ b/isaaclab_arena/recording/arena_recorder_manager.py
+@@ -97,4 +97,6 @@ class ArenaRecorderManager(RecorderManager):
+         """Return environment IDs on the environment's device."""
+         if env_ids is None:
+             return torch.arange(self._env.num_envs, device=self._env.device)
++        if isinstance(env_ids, slice):  # IL3.0@d061bf35 passes slice(None) for "all envs"
++            return torch.arange(self._env.num_envs, device=self._env.device)[env_ids]
+         return torch.as_tensor(env_ids, dtype=torch.long, device=self._env.device)
+diff --git a/isaaclab_arena_environments/mdp/robot_configs.py b/isaaclab_arena_environments/mdp/robot_configs.py
+index 6a12f80..16f5e81 100644
+--- a/isaaclab_arena_environments/mdp/robot_configs.py
++++ b/isaaclab_arena_environments/mdp/robot_configs.py
+@@ -9,7 +9,7 @@
+ from __future__ import annotations
+ 
+ from isaaclab.utils.assets import ISAACLAB_NUCLEUS_DIR
+-from isaaclab_assets.robots.franka import FRANKA_PANDA_HIGH_PD_CFG
++from isaaclab_assets.robots.franka import FRANKA_PANDA_LEGACY_HIGH_PD_CFG as FRANKA_PANDA_HIGH_PD_CFG  # IL3.0@d061bf35: legacy names
+ 
+ _LEGACY_FRANKA_PANDA_USD_PATH = f"{ISAACLAB_NUCLEUS_DIR}/Robots/FrankaEmika/Legacy/panda_instanceable.usd"
+ 
